@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gefira mobile : installation</title>
+<style>
+  :root {
+    --bleu: #000091;
+    --bleu-pale: #e8eaff;
+    --encre: #1f2340;
+    --fond: #f5f5fe;
+    --rouge: #e1000f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 16px 40px;
+    background: var(--fond);
+    color: var(--encre);
+    font: 16px/1.45 system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  main { max-width: 460px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 24px; color: var(--bleu); }
+  .intro { margin: 0 0 20px; }
+  .etape {
+    background: #fff;
+    border: 1px solid #d8dbf5;
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .etape h2 { margin: 0 0 4px; font-size: 17px; color: var(--bleu); }
+  .etape p { margin: 0 0 12px; font-size: 15px; }
+  .bouton {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+    padding: 0 14px;
+    border-radius: 12px;
+    background: var(--bleu);
+    color: #fff;
+    font-weight: 700;
+    font-size: 17px;
+    text-decoration: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 145, 0.3);
+  }
+  .bouton.fait { background: #0a6b3d; box-shadow: none; }
+  .note { font-size: 14px; color: #4a4f73; margin: 18px 0 0; }
+  .adresse { word-break: break-all; font-size: 12px; color: #4a4f73; margin: 10px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gefira mobile</h1>
+  <p class="intro">Un affichage adapté au téléphone pour Gefira (IRA de Bastia). L'installation se fait en trois étapes, dans cet ordre.</p>
+
+  <section class="etape">
+    <h2>1. Installer Tampermonkey</h2>
+    <p>C'est l'extension qui fait fonctionner le script. Touchez « Ajouter à Firefox », puis confirmez.</p>
+    <a class="bouton" data-etape="1" target="_blank" rel="noopener" href="https://addons.mozilla.org/firefox/addon/tampermonkey/">Ouvrir Tampermonkey</a>
+  </section>
+
+  <section class="etape">
+    <h2>2. Installer le script</h2>
+    <p>Tampermonkey affiche une page d'installation : touchez « Installer ». Le script est activé tout de suite, et se met à jour tout seul.</p>
+    <a class="bouton" id="lien-script" data-etape="2" href="#">Installer le script</a>
+    <p class="adresse" id="adresse-script"></p>
+  </section>
+
+  <section class="etape">
+    <h2>3. Ouvrir Gefira</h2>
+    <p>Connectez-vous comme d'habitude : la page s'affiche avec la nouvelle présentation.</p>
+    <a class="bouton" data-etape="3" href="https://extranet-bastia.les-ira.fr/">Ouvrir Gefira</a>
+  </section>
+
+  <p class="note">À l'étape 2, si du texte s'affiche au lieu d'une page d'installation, c'est que Tampermonkey n'est pas encore actif : reprenez l'étape 1. Cette méthode fonctionne avec Firefox sur Android (et avec Tampermonkey sur ordinateur). Elle ne fonctionne pas avec Chrome sur Android ni sur iPhone.</p>
+</main>
+
+<script>
+  // Adresse du script, dans le dépôt GitHub
+  (function () {
+    var COMPTE = 'Gefiratel';
+    var DEPOT = 'Gefiramobile';
+    var BRANCHE = 'main';
+    var FICHIER = 'gefira-mobile.user.js';
+    var adresse = 'https://raw.githubusercontent.com/' + COMPTE + '/' + DEPOT + '/' + BRANCHE + '/' + FICHIER;
+    document.getElementById('lien-script').href = adresse;
+    document.getElementById('adresse-script').textContent = adresse;
+
+    // Une étape touchée est marquée comme faite (simple repère visuel, mémorisé sur cet appareil)
+    var cles = {};
+    try { cles = JSON.parse(localStorage.getItem('gefira_install') || '{}') || {}; } catch (e) { cles = {}; }
+    var boutons = document.querySelectorAll('.bouton');
+    Array.prototype.forEach.call(boutons, function (b) {
+      var n = b.getAttribute('data-etape');
+      if (cles[n]) b.classList.add('fait');
+      b.addEventListener('click', function () {
+        cles[n] = true;
+        try { localStorage.setItem('gefira_install', JSON.stringify(cles)); } catch (e) { /* stockage indisponible */ }
+        b.classList.add('fait');
+      });
+    });
+  })();
+</script>
+</body>
+</html>
