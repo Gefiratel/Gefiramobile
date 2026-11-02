@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gefira mobile efficace
 // @description  Améliore l'affichage de Gefira (IRA de Bastia) : menu, actualités, planning, affichage mobile
-// @version      2.7
+// @version      2.8
 // @updateURL    https://raw.githubusercontent.com/Gefiratel/Gefiramobile/main/gefira-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/Gefiratel/Gefiramobile/main/gefira-mobile.user.js
 // @match        https://extranet-bastia.les-ira.fr/intranet.php*
@@ -51,8 +51,10 @@
 
   function ajouterBoutonOrigine() {
     if (window.top !== window.self || document.getElementById('gefira-origine')) return;
-    // Page d'ordinateur affichée réduite sur le téléphone : on agrandit le bouton du même facteur
-    const k = (navigator.maxTouchPoints > 0)
+    // On agrandit le bouton seulement quand la page d'ordinateur est affichée réduite (mode origine).
+    // En affichage mobile, la taille normale convient : le script règle lui-même la largeur de l'écran
+    // juste après (viewport), donc mesurer ici donnerait un facteur faux et un bouton énorme.
+    const k = (modeOrigine && navigator.maxTouchPoints > 0)
       ? Math.max(1, window.innerWidth / Math.min(screen.width, screen.height))
       : 1;
     const b = document.createElement('button');
