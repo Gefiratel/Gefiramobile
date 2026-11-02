@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Gefira mobile efficace
-// @description  Améliore l'affichage de Gefira (IRA de Bastia) : menu, actualités, émargements, planning, affichage mobile
-// @version      2.5
+// @description  Améliore l'affichage de Gefira (IRA de Bastia) : menu, actualités, planning, affichage mobile
+// @version      2.7
 // @updateURL    https://raw.githubusercontent.com/Gefiratel/Gefiramobile/main/gefira-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/Gefiratel/Gefiramobile/main/gefira-mobile.user.js
 // @match        https://extranet-bastia.les-ira.fr/intranet.php*
@@ -30,6 +30,50 @@
   const page = estIntranet ? new URLSearchParams(location.search).get('page') : null;
   const pageActu = estIntranet && (!page || page === 'actu');
   const pagePlanning = estIntranet && page === 'planning';
+
+  // ------------------------------------------------------------------
+  // Filet de sécurité pour l'émargement (page Actualités uniquement).
+  // Un petit bouton « Version d'origine » est toujours visible. Il recharge la page SANS aucune
+  // modification du script : c'est la page d'ordinateur du site, intacte, donc le bouton d'émargement
+  // y est forcément présent. Ce mode dure 15 minutes, puis le script reprend tout seul.
+  // Ce bouton ne dépend pas de la détection du bouton d'émargement : il marche dans tous les cas.
+  // ------------------------------------------------------------------
+  const CLE_ORIGINE = 'gefira_actu_origine';
+  const DUREE_ORIGINE = 15 * 60 * 1000;   // en millisecondes
+
+  function origineActive() {
+    try {
+      const t = parseInt(localStorage.getItem(CLE_ORIGINE) || '0', 10);
+      return !!t && (Date.now() - t) < DUREE_ORIGINE;
+    } catch (e) { return false; }
+  }
+  const modeOrigine = pageActu && origineActive();
+
+  function ajouterBoutonOrigine() {
+    if (window.top !== window.self || document.getElementById('gefira-origine')) return;
+    // Page d'ordinateur affichée réduite sur le téléphone : on agrandit le bouton du même facteur
+    const k = (navigator.maxTouchPoints > 0)
+      ? Math.max(1, window.innerWidth / Math.min(screen.width, screen.height))
+      : 1;
+    const b = document.createElement('button');
+    b.id = 'gefira-origine';
+    b.type = 'button';
+    b.textContent = modeOrigine ? 'Revenir à la version mobile' : 'Version d\'origine';
+    b.style.cssText = 'position:fixed !important;right:' + (10 * k) + 'px !important;bottom:' + (10 * k) + 'px !important;'
+      + 'z-index:2147483647 !important;font:700 ' + (14 * k) + 'px/1.2 sans-serif !important;'
+      + 'padding:' + (9 * k) + 'px ' + (14 * k) + 'px !important;background:#000091 !important;color:#ffffff !important;'
+      + 'border:0 !important;border-radius:999px !important;opacity:0.92 !important;display:block !important;'
+      + 'visibility:visible !important;margin:0 !important;width:auto !important;height:auto !important;';
+    b.addEventListener('click', function () {
+      try {
+        if (modeOrigine) localStorage.removeItem(CLE_ORIGINE);
+        else localStorage.setItem(CLE_ORIGINE, String(Date.now()));
+      } catch (e) { /* stockage indisponible */ }
+      location.reload();
+    });
+    // Posé sur <html> (pas sur <body>) : reste visible même si la page est masquée pendant le chargement
+    document.documentElement.appendChild(b);
+  }
 
   // Bouton « Retour aux actualités » pour les pages laissées en version ordinateur.
   // Fonction autonome (elle ne dépend de rien d'autre dans le script). Le bouton est inséré dans la page,
@@ -120,6 +164,42 @@
     return t.replace(/\s+/g, ' ').replace(/’/g, "'").trim().toLowerCase();
   }
 
+  // ------------------------------------------------------------------
+  // Émargement : le bouton d'origine du site n'est jamais modifié ni remplacé.
+  // Le script repère seulement où il se trouve (bouton, petit formulaire ou fenêtre flottante
+  // qui l'entoure) pour que ses mises en forme (couleurs, largeurs, lignes) l'évitent.
+  // ------------------------------------------------------------------
+  const RE_ZONE = /emarg|presence|pointer|signer|appel/;
+  const SEL_CLIC = 'a, button, input, [onclick], [role="button"]';
+
+  function sansAccents(t) {
+    return t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function zonesEmargement() {
+    const zones = [];
+    const ajouter = function (z) { if (z && zones.indexOf(z) < 0) zones.push(z); };
+    document.querySelectorAll(SEL_CLIC).forEach(function (el) {
+      if (el.closest('#gefira-menu') || el.closest('#gefira-entete') || el.closest('#gefira-planning')) return;
+      const img = el.querySelector('img');
+      const t = (el.textContent || '') + ' ' + (el.value || '') + ' ' + (el.title || '') + ' ' + (img ? (img.alt || '') : '');
+      const sa = sansAccents(t);
+      if (!sa || sa.length > 60 || !RE_ZONE.test(sa)) return;
+      ajouter(el);
+      const f = el.closest('form');
+      if (f && f.textContent.length <= 400) ajouter(f);
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        const pos = getComputedStyle(a).position;
+        if ((pos === 'fixed' || pos === 'absolute') && a.textContent.length <= 600) { ajouter(a); break; }
+      }
+    });
+    return zones;
+  }
+
+  function dansZone(el, zones) {
+    return zones.some(function (z) { return z.contains(el); });
+  }
+
   function largeurEcran() {
     return Math.min(document.documentElement.clientWidth, window.innerWidth);
   }
@@ -162,8 +242,10 @@
   // Remplace par un bleu très foncé les fonds et les bordures gris anthracite de la page
   function assombrirGris() {
     const cotes = ['top', 'right', 'bottom', 'left'];
+    const zones = zonesEmargement();
     document.querySelectorAll('body, body *').forEach(function (el) {
       if (el.closest('#gefira-menu') || el.closest('#gefira-planning') || el.closest('#gefira-entete')) return;
+      if (dansZone(el, zones)) return;
       const c = getComputedStyle(el);
       if (estGrisSombre(c.backgroundColor)) {
         imposer(el, 'background-color', BLEU_NUIT);
@@ -224,9 +306,11 @@
   // Texte, bordures et fonds en gris clair : bleu du site (texte blanc sur les fonds convertis)
   function griserVersBleu() {
     const cotes = ['top', 'right', 'bottom', 'left'];
+    const zones = zonesEmargement();
     const fonds = [];
     document.querySelectorAll('body, body *').forEach(function (el) {
       if (el.closest('#gefira-menu') || el.closest('#gefira-planning') || el.closest('#gefira-entete')) return;
+      if (dansZone(el, zones)) return;
       if (/^(SCRIPT|STYLE|IMG|SVG|IFRAME)$/i.test(el.tagName)) return;
       const c = getComputedStyle(el);
       if (estGrisClair(c.color)
@@ -248,7 +332,7 @@
     fonds.forEach(function (fond) {
       imposer(fond, 'color', '#ffffff');
       fond.querySelectorAll('*').forEach(function (d) {
-        if (d.closest('#gefira-menu') || d.closest('#gefira-entete')) return;
+        if (d.closest('#gefira-menu') || d.closest('#gefira-entete') || dansZone(d, zones)) return;
         const cd = getComputedStyle(d);
         const bg = lireCouleur(cd.backgroundColor);
         if (bg && bg.a > 0.1) return;
@@ -314,9 +398,11 @@
     if (!menu || !borne) return;
     const logo = trouverLogo();
     const titres = trouverBlocsTitre();
+    const zones = zonesEmargement();
 
     document.querySelectorAll('body *').forEach(function (el) {
       if (el.closest('#gefira-menu') || el.closest('#gefira-planning') || el.closest('#gefira-entete')) return;
+      if (dansZone(el, zones)) return;
       if (/^(SCRIPT|STYLE|IMG|SVG|A|INPUT|BUTTON)$/i.test(el.tagName)) return;
       if (!(borne.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING)) return;
       if (el.contains(borne) || el.contains(menu) || (logo && el.contains(logo))) return;
@@ -1126,6 +1212,7 @@
       const titre = trouverTitre();
       if (!cadre || !titre) return;
       const MARGE_LATERALE = margeInterne();   // marge commune, mesurée
+      const zones = zonesEmargement();         // bouton d'émargement d'origine : jamais modifié
 
       // 1. Marges latérales : on réduit celles des blocs qui entourent le titre
       for (let a = titre.parentElement; a && a !== cadre; a = a.parentElement) {
@@ -1145,7 +1232,7 @@
 
       // Tous les éléments situés après le titre
       const contenu = Array.from(cadre.querySelectorAll('*')).filter(function (el) {
-        if (titre.contains(el) || el.closest('#gefira-menu')) return false;
+        if (titre.contains(el) || el.closest('#gefira-menu') || dansZone(el, zones)) return false;
         return !!(titre.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
       });
 
@@ -1174,7 +1261,9 @@
 
       // 4. Tableaux de données : texte lisible, défilement horizontal s'ils dépassent du cadre
       contenu.filter(function (el) {
-        return el.tagName === 'TABLE' && !el.querySelector('table');
+        if (el.tagName !== 'TABLE' || el.querySelector('table')) return false;
+        // Petit tableau qui contient le bouton d'émargement : laissé tel quel
+        return !(el.textContent.length <= 400 && zones.some(function (z) { return el.contains(z); }));
       }).forEach(function (table) {
         if (table.closest('.gefira-defile')) return;
 
@@ -1192,364 +1281,10 @@
       });
     }
 
-    // ------------------------------------------------------------------
-    // Émargements : chaque demande d'émargement du site est reprise dans un cartouche, au-dessus du titre.
-    //   vert  = à émarger ; toucher le cartouche déclenche le bouton d'origine, puis il devient gris clair ;
-    //   rouge + ⚠ = demande disparue sans avoir été touchée (émargement raté).
-    // Le suivi est mémorisé sur l'appareil et remis à zéro à chaque nouvelle journée.
-    // ------------------------------------------------------------------
-    // Réglage : afficher les cartouches d'émargement sur la page ?
-    //   false : COLLECTE SEULEMENT. La page ne change pas ; le script enregistre juste le code des boutons
-    //           d'émargement quand ils apparaissent (cadre « Code des émargements » en bas de page).
-    //   true  : les cartouches (vert / gris clair / rouge) sont affichés au-dessus du titre.
-    const AFFICHER_CARTOUCHES = false;
-
-    const CLE_EMARG = 'gefira_emargements2';   // « 2 » : repart de zéro après la correction des faux positifs
-    // Formulations reconnues (comparées sans accents ni majuscules), toujours COURTES (32 caractères au plus) :
-    //  - « émarger », « émargez », « émargement » sur un bouton ou un lien
-    //  - « déclarer / valider / confirmer / signaler / indiquer / attester / pointer / signer + (ma, sa, votre…) présence »
-    //  - « je suis présent(e) », ou seulement « présent », « présence », « signer », « pointer », « appel »
-    // Un paragraphe, une actualité ou un lien noyé dans une phrase (par exemple le rappel des règles
-    // d'émargement) n'est jamais pris pour une demande. Hors bouton ou lien, seul le mot « Émarger »
-    // seul, dans son propre bloc, est accepté.
-    const RE_EMARGER = /^emarg(er|ez)$/;
-    const RE_VARIANTES = /(declar|valid|confirm|signal|indiqu|attest|point|sign|notifi)\w*\s+(ma |mon |sa |son |votre |ta |la |l')?\s*(presence|arrivee)|(^|\s)je suis presente?\b|^(presente?(\(e\))?|presence|signer|pointer|appel)$/;
-    const SELECTEUR_CLIC = 'a, button, input, [onclick], [role="button"]';
-
-    function sansAcc(t) {
-      return t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
-    }
-
-    // Élément qui se trouve au milieu d'une phrase ou d'un paragraphe (texte voisin bien plus long que lui)
-    function enPhrase(el) {
-      const p = el.parentElement;
-      if (!p || getComputedStyle(el).display !== 'inline') return false;
-      const propre = texteDe(el).replace(/\s+/g, ' ').trim().length;
-      return p.textContent.replace(/\s+/g, ' ').trim().length > propre + 100;
-    }
-
-    function estDemande(t, el) {
-      const sa = sansAcc(t);
-      if (!sa || sa.length > 32) return false;
-      const clic = el.closest(SELECTEUR_CLIC);
-      if (clic) {
-        // Le bouton ou le lien doit lui-même être court : un grand bloc cliquable (toute une actualité) n'en est pas un
-        if (sansAcc(texteDe(clic)).length > 40 || enPhrase(clic)) return false;
-        return /emarg(er|ez|ement)\b/.test(sa) || RE_VARIANTES.test(sa);
-      }
-      return RE_EMARGER.test(sa) && !enPhrase(el);
-    }
-
-    let demandesPresentes = {};   // identifiant -> demande actuellement visible sur la page
-
-    function jourLocal() {
-      const d = new Date();
-      const p = function (n) { return (n < 10 ? '0' : '') + n; };
-      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-    }
-
-    function lireEmarg() {
-      const vide = { jour: jourLocal(), items: {}, ordre: [] };
-      try {
-        const s = JSON.parse(localStorage.getItem(CLE_EMARG) || 'null');
-        // Journée terminée : on repart de zéro
-        if (s && s.jour === vide.jour && s.items && s.ordre) return s;
-      } catch (e) { /* stockage illisible : on repart de zéro */ }
-      return vide;
-    }
-
-    function ecrireEmarg(etat) {
-      try { localStorage.setItem(CLE_EMARG, JSON.stringify(etat)); } catch (e) { /* stockage indisponible */ }
-    }
-
-    function texteDe(el) {
-      if (el.tagName === 'INPUT' && /^(button|submit)$/i.test(el.type)) return el.value || '';
-      return el.textContent || '';
-    }
-
-    // Les boutons « Émarger » visibles sur la page
-    function trouverDemandes() {
-      const feuilles = Array.from(document.querySelectorAll('body *')).filter(function (el) {
-        if (el.closest('#gefira-emargement') || el.closest('#gefira-menu') || el.closest('#gefira-entete')) return false;
-        if (/^(SCRIPT|STYLE|OPTION|NOSCRIPT)$/i.test(el.tagName)) return false;
-        if (!el.getClientRects().length) return false;
-        const t = normaliser(texteDe(el));
-        if (!t || t.length > 40 || !estDemande(t, el)) return false;
-        return !Array.from(el.children).some(function (c) { return estDemande(normaliser(c.textContent || ''), c); });
-      });
-
-      const cibles = [];
-      feuilles.forEach(function (f) {
-        const cible = f.closest('a, button, [onclick], input') || f;
-        if (cibles.indexOf(cible) < 0) cibles.push(cible);
-      });
-
-      const vus = {};
-      return cibles.map(function (cible) {
-        const propre = texteDe(cible).replace(/\s+/g, ' ').trim();
-        // Texte voisin (cours, horaire) : le plus petit bloc parent qui ne contient que cette demande
-        let ctx = '';
-        let a = cible.parentElement;
-        for (let i = 0; a && a !== document.body && i < 5; i++, a = a.parentElement) {
-          if (cibles.filter(function (c) { return a.contains(c); }).length > 1) break;
-          const t = a.textContent.replace(/\s+/g, ' ').trim();
-          if (t.length > 160) break;
-          const reste = t.replace(propre, '').trim();
-          if (reste) { ctx = reste; break; }
-        }
-        let id = normaliser(ctx + '|' + propre);
-        vus[id] = (vus[id] || 0) + 1;
-        if (vus[id] > 1) id += '#' + vus[id];
-        return { id: id, label: propre || 'Émarger', ctx: ctx, cible: cible };
-      });
-    }
-
-    function noeud(balise, css, texte) {
-      const e = document.createElement(balise);
-      if (css) e.style.cssText = css;
-      if (texte !== undefined) e.textContent = texte;
-      return e;
-    }
-
-    function marquerFait(id) {
-      const etat = lireEmarg();
-      if (etat.items[id] && etat.items[id].etat !== 'fait') {
-        etat.items[id].etat = 'fait';
-        ecrireEmarg(etat);
-      }
-    }
-
-    function dessinerEmarg(etat) {
-      const titre = trouverTitre();
-      let boite = document.getElementById('gefira-emargement');
-      if (!etat.ordre.length || !titre) {
-        if (boite && !etat.ordre.length) boite.remove();
-        return;
-      }
-      if (!boite) {
-        boite = noeud('div', 'display:block;width:auto;box-sizing:border-box;margin:0 0 12px;'
-          + 'font-family:' + POLICE + ';');
-        boite.id = 'gefira-emargement';
-      }
-      // Au-dessus du titre des actualités
-      if (boite.nextElementSibling !== titre) titre.insertAdjacentElement('beforebegin', boite);
-
-      while (boite.firstChild) boite.removeChild(boite.firstChild);
-
-      etat.ordre.forEach(function (id) {
-        const it = etat.items[id];
-        if (!it) return;
-        const rate = it.etat === 'rate';
-        const fait = it.etat === 'fait';
-        const fond = rate ? '#fdecee' : (fait ? '#dfe2ee' : '#0a6b3d');
-        const encre = rate ? '#b3000c' : (fait ? '#4a4f73' : '#ffffff');
-        const carte = noeud('div',
-          'display:flex;align-items:center;gap:12px;box-sizing:border-box;width:100%;min-height:56px;'
-          + 'padding:10px 14px;margin:0 0 8px;border-radius:12px;'
-          + 'background:' + fond + ';color:' + encre + ';'
-          + (rate ? 'box-shadow:inset 0 0 0 2px #e1000f;' : (fait ? '' : 'box-shadow:0 2px 6px rgba(10,107,61,0.35);'))
-          + 'cursor:' + (it.etat === 'a_faire' ? 'pointer' : 'default') + ';'
-          + '-webkit-tap-highlight-color:transparent;');
-        carte.setAttribute('role', 'button');
-        carte.setAttribute('aria-label', (rate ? 'Émargement raté : ' : (fait ? 'Émargé : ' : 'À émarger : '))
-          + it.label + (it.ctx ? ' ' + it.ctx : ''));
-
-        if (rate) carte.appendChild(noeud('span', 'font-size:24px;line-height:1;flex:0 0 auto;', '⚠️'));
-        const texte = noeud('div', 'flex:1 1 auto;min-width:0;');
-        texte.appendChild(noeud('div', 'font-size:18px;font-weight:700;line-height:1.25;', it.label));
-        const detail = (rate ? 'Émargement manqué' : '') + (rate && it.ctx ? ' · ' : '') + (it.ctx || '');
-        if (detail) {
-          texte.appendChild(noeud('div', 'font-size:13px;line-height:1.3;margin-top:2px;opacity:0.9;', detail));
-        }
-        carte.appendChild(texte);
-
-        if (it.etat === 'a_faire') {
-          carte.addEventListener('click', function () {
-            marquerFait(id);
-            const d = demandesPresentes[id];
-            dessinerEmarg(lireEmarg());          // le cartouche reste en place, il devient gris clair
-            if (d && d.cible) d.cible.click();   // puis on déclenche le bouton d'origine
-          });
-        }
-        boite.appendChild(carte);
-      });
-    }
-
-    // final = true : une demande qui n'est plus sur la page et qui n'a pas été touchée est comptée comme ratée
-    function traiterEmargements(final) {
-      if (!AFFICHER_CARTOUCHES) {   // collecte seulement : rien n'est affiché ni modifié
-        const ancien = document.getElementById('gefira-emargement');
-        if (ancien) ancien.remove();
-        return;
-      }
-      if (!trouverTitre()) return;   // page pas encore prête : on ne conclut rien
-      const etat = lireEmarg();
-      const demandes = trouverDemandes();
-      demandesPresentes = {};
-
-      demandes.forEach(function (d) {
-        demandesPresentes[d.id] = d;
-        if (!etat.items[d.id]) {
-          etat.items[d.id] = { label: d.label, ctx: d.ctx, etat: 'a_faire' };
-          etat.ordre.push(d.id);
-        } else if (etat.items[d.id].etat === 'rate') {
-          etat.items[d.id].etat = 'a_faire';   // la demande est de nouveau là : elle est à faire
-        }
-        // Si on émarge avec le bouton d'origine, on le note aussi
-        if (!d.cible.dataset.gefiraEmarg) {
-          d.cible.dataset.gefiraEmarg = '1';
-          d.cible.addEventListener('click', function () { marquerFait(d.id); }, true);
-        }
-      });
-
-      if (final) {
-        etat.ordre.forEach(function (id) {
-          if (!demandesPresentes[id] && etat.items[id].etat === 'a_faire') etat.items[id].etat = 'rate';
-        });
-      }
-      ecrireEmarg(etat);
-      dessinerEmarg(etat);
-    }
-
-    // ------------------------------------------------------------------
-    // Diagnostic : quand un élément « émarg… » apparaît sur la page (même à heure fixe, même si on
-    // ne regarde pas), le script garde son code HTML. Il est affiché en bas de la page Actualités,
-    // dans un cadre repliable, avec un bouton « Copier le code ».
-    // ------------------------------------------------------------------
-    const CLE_DIAG = 'gefira_diag_emarg';
-    // Pour le diagnostic, on garde aussi ce qui ressemble de près ou de loin à une demande de présence
-    const RE_MARG = /presence|signature|pointage|signer|pointer|appel/;
-    function motCle(t, el) {
-      const sa = sansAcc(t);
-      if (/emarg/.test(sa)) return true;
-      return !!el.closest(SELECTEUR_CLIC) && RE_MARG.test(sa);
-    }
-
-    function lireDiag() {
-      try {
-        const d = JSON.parse(localStorage.getItem(CLE_DIAG) || 'null');
-        if (d && d.items) return d;
-      } catch (e) { /* illisible */ }
-      return { items: [] };
-    }
-
-    function afficherDiag() {
-      const diag = lireDiag();
-      if (!diag.items.length || !document.body) return;
-      let cadre = document.getElementById('gefira-diag');
-      if (!cadre) {
-        cadre = noeud('details', 'display:block;margin:16px 4px;padding:10px;border:1px dashed ' + BLEU
-          + ';border-radius:10px;background:#ffffff;font:13px/1.4 ' + POLICE + ';color:' + ENCRE + ';');
-        cadre.id = 'gefira-diag';
-        document.body.appendChild(cadre);
-      }
-      const ouvert = cadre.open;
-      while (cadre.firstChild) cadre.removeChild(cadre.firstChild);
-      cadre.appendChild(noeud('summary', 'font-weight:700;color:' + BLEU + ';',
-        'Code des émargements enregistré (' + diag.items.length + ') : à me transmettre'));
-
-      const texte = diag.items.map(function (x) {
-        return '--- ' + x.heure + (x.visible ? '' : ' (élément masqué)') + ' ---\n' + x.html;
-      }).join('\n\n');
-      const zone = noeud('textarea', 'display:block;width:100%;height:170px;box-sizing:border-box;'
-        + 'margin-top:8px;font:11px/1.3 monospace;');
-      zone.readOnly = true;
-      zone.value = texte;
-      cadre.appendChild(zone);
-
-      const bouton = function (libelle, fond, action) {
-        const b = noeud('button', 'display:block;width:100%;min-height:44px;margin-top:8px;font-size:15px;'
-          + 'font-weight:700;border:0;border-radius:10px;color:#ffffff;background:' + fond + ';', libelle);
-        b.type = 'button';
-        b.addEventListener('click', action);
-        cadre.appendChild(b);
-      };
-      bouton('Copier le code', BLEU, function () {
-        const fini = function () { zone.select(); };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(texte).then(fini, function () {
-            zone.select();
-            try { document.execCommand('copy'); } catch (e) { /* on laisse le texte sélectionné */ }
-          });
-        } else {
-          zone.select();
-          try { document.execCommand('copy'); } catch (e) { /* on laisse le texte sélectionné */ }
-        }
-      });
-      bouton('Remettre le suivi des émargements à zéro', '#b3000c', function () {
-        try { localStorage.removeItem(CLE_EMARG); } catch (e) { /* stockage indisponible */ }
-        location.reload();
-      });
-      bouton('Effacer', '#6b6f8d', function () {
-        try { localStorage.removeItem(CLE_DIAG); } catch (e) { /* stockage indisponible */ }
-        cadre.remove();
-      });
-      cadre.open = ouvert;
-    }
-
-    function capturerEmargement() {
-      const feuilles = Array.from(document.querySelectorAll('body *')).filter(function (el) {
-        if (el.closest('#gefira-emargement') || el.closest('#gefira-diag') || el.closest('#gefira-menu')) return false;
-        if (/^(SCRIPT|STYLE|NOSCRIPT|OPTION)$/i.test(el.tagName)) return false;
-        const t = normaliser(texteDe(el));
-        if (!t || t.length > 80 || !motCle(t, el)) return false;
-        return !Array.from(el.children).some(function (c) { return motCle(normaliser(c.textContent || ''), c); });
-      });
-      if (!feuilles.length) return;
-
-      const diag = lireDiag();
-      let nouveau = false;
-      feuilles.forEach(function (f) {
-        // On remonte de quelques niveaux pour garder le texte voisin (cours, horaire)
-        let haut = f;
-        for (let i = 0; i < 3 && haut.parentElement && haut.parentElement !== document.body; i++) {
-          if (haut.parentElement.textContent.length > 600) break;
-          haut = haut.parentElement;
-        }
-        const html = haut.outerHTML.slice(0, 3000);
-        if (diag.items.some(function (x) { return x.html === html; })) return;
-        diag.items.push({
-          heure: new Date().toLocaleString('fr-FR'),
-          visible: f.getClientRects().length > 0,
-          html: html
-        });
-        nouveau = true;
-      });
-      if (!nouveau) return;
-      diag.items = diag.items.slice(-8);
-      try { localStorage.setItem(CLE_DIAG, JSON.stringify(diag)); } catch (e) { /* stockage indisponible */ }
-      afficherDiag();
-    }
-
-    function suivreEmargements() {
-      setInterval(function () { securise(function () { traiterEmargements(true); }); }, 20000);
-      document.addEventListener('visibilitychange', function () {
-        if (!document.hidden) securise(function () { traiterEmargements(true); });
-      });
-
-      // Surveille la page : une demande qui apparaît (ou disparaît) à heure fixe est vue tout de suite
-      securise(afficherDiag);
-      securise(capturerEmargement);
-      let minuteur = null;
-      new MutationObserver(function (changements) {
-        const ailleurs = changements.some(function (m) {
-          const cible = m.target.nodeType === 1 ? m.target : m.target.parentElement;
-          return cible && !cible.closest('#gefira-emargement') && !cible.closest('#gefira-diag');
-        });
-        if (!ailleurs) return;   // nos propres affichages ne relancent rien
-        clearTimeout(minuteur);
-        minuteur = setTimeout(function () {
-          securise(capturerEmargement);
-          securise(function () { traiterEmargements(true); });
-        }, 600);
-      }).observe(document.body, { childList: true, subtree: true, characterData: true });
-    }
-
     function agir() {
       securise(composerEntete);
       securise(uniformiserMarges);
       securise(traiter);
-      securise(function () { traiterEmargements(false); });
       securise(assombrirGris);
       securise(griserVersBleu);
       securise(masquerBlocUtilisateur);
@@ -1562,8 +1297,6 @@
     setTimeout(agir, 1800);
     setTimeout(function () {
       agir();
-      securise(function () { traiterEmargements(true); });
-      suivreEmargements();
       pret();
     }, 3000);
   }
@@ -2284,7 +2017,7 @@
 
   const modePlanning = pagePlanning ? lireMode() : null;
   // En vue « Semaine », la page d'origine reste intacte : rien à masquer
-  const masquer = estConnexion || pageActu || (pagePlanning && modePlanning !== 'ordinateur');
+  const masquer = estConnexion || (pageActu && !modeOrigine) || (pagePlanning && modePlanning !== 'ordinateur');
 
   let masque = null;
   let restant = 0;
@@ -2333,13 +2066,15 @@
   }
 
   auDomPret(function () {
-    if (estConnexion || pageActu) {
+    if (pageActu) securise(ajouterBoutonOrigine);
+
+    if (estConnexion || (pageActu && !modeOrigine)) {
       const pret = declarerAttente();
       affichageMobile();
       pret();
     }
 
-    if (pageActu) {
+    if (pageActu && !modeOrigine) {
       moduleMenu('menu', declarerAttente());
       moduleActualites(declarerAttente());
     }
